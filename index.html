@@ -1,0 +1,955 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerador de Comprovante de Coleta</title>
+    
+    <!-- Bibliotecas usadas na geração do PDF -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+
+    <style>
+        /* ==========================================================================
+           RESET E VARIÁVEIS GERAIS
+           ========================================================================== */
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Arial', 'Helvetica', sans-serif; }
+        :root {
+            --bg-color: #f4f7f6; --primary-color: #2c3e50; --secondary-color: #34495e;
+            --accent-color: #3498db; --success-color: #27ae60; --text-color: #333; --border-color: #ccc;
+        }
+        body { background-color: var(--bg-color); color: var(--text-color); line-height: 1.6; }
+
+        /* ==========================================================================
+           ESTILOS DA INTERFACE (TELA)
+           ========================================================================== */
+        #app-container {
+            max-width: 900px; margin: 40px auto; padding: 30px;
+            background: #fff; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        h1 { color: var(--primary-color); text-align: center; margin-bottom: 10px; }
+        .instrucao { text-align: center; color: #666; margin-bottom: 20px; font-size: 15px; }
+        textarea {
+            width: 100%; height: 200px; padding: 15px; border: 1px solid var(--border-color);
+            border-radius: 5px; font-family: monospace; font-size: 14px; resize: vertical;
+            margin-bottom: 20px; box-shadow: inset 0 2px 4px rgba(0,0,0,0.05);
+        }
+        .botoes-acao { display: flex; gap: 15px; justify-content: center; margin-bottom: 30px; }
+        button {
+            padding: 12px 25px; font-size: 16px; font-weight: bold; color: #fff;
+            border: none; border-radius: 5px; cursor: pointer; transition: background 0.3s, transform 0.1s;
+        }
+        button:active { transform: scale(0.98); }
+        #btn-gerar { background-color: var(--accent-color); }
+        #btn-gerar:hover { background-color: #2980b9; }
+        #btn-limpar { background-color: #95a5a6; }
+        #btn-limpar:hover { background-color: #7f8c8d; }
+
+        #acoes-resultado {
+            display: none; justify-content: center; gap: 15px; margin: 20px 0 30px 0;
+            padding-top: 20px; border-top: 1px solid var(--border-color);
+        }
+        #btn-whatsapp { background-color: #25D366; } /* Verde WhatsApp */
+        #btn-whatsapp:hover { background-color: #1ebe5d; }
+        #btn-baixar-pdf { background-color: var(--success-color); }
+        #btn-baixar-pdf:hover { background-color: #219150; }
+
+        #feedback-container {
+            display: none; background: #e8f8f5; border-left: 5px solid var(--success-color);
+            padding: 15px; margin-bottom: 20px; border-radius: 4px;
+        }
+        #feedback-container h3 { color: var(--success-color); margin-bottom: 10px; }
+        #feedback-container ul { list-style: none; margin-left: 10px; }
+        .aviso { color: #d35400; font-weight: bold; margin-top: 10px; }
+
+        /* ==========================================================================
+           CONTROLE ESTRITO DE DIMENSÃO E PAGINAÇÃO A4
+           ========================================================================== */
+        #preview-wrapper {
+            display: none; 
+            border: 2px dashed var(--border-color); 
+            padding: 20px;
+            background: #e9ecef; 
+            border-radius: 8px; 
+            overflow-x: auto; 
+            -webkit-overflow-scrolling: touch;
+        }
+
+        #documento-final {
+            margin: 0 auto;
+        }
+
+        /* Classe que emula uma página A4 exata (794x1123 a 96dpi) */
+        .pdf-page {
+            background: #fff;
+            width: 794px;
+            min-width: 794px;
+            max-width: 794px;
+            height: 1123px; /* A4 altura */
+            margin: 0 auto 20px auto;
+            color: #000;
+            padding: 25px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            position: relative;
+            overflow: hidden; /* Corta o que sobrar caso passe, mas o JS vai gerenciar */
+        }
+
+        .page-number {
+            position: absolute;
+            bottom: 20px;
+            right: 25px;
+            font-size: 11px;
+            color: #333;
+            font-weight: bold;
+        }
+        
+        .secao-titulo { font-size: 12px; font-weight: bold; background: #eee; border: 1px solid #000; padding: 4px 8px; margin-bottom: -1px; text-transform: uppercase; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 15px; font-size: 11px; word-break: break-word; table-layout: fixed; }
+        table, th, td { border: 1px solid #000; }
+        th { background-color: #f5f5f5; padding: 4px; text-align: left; font-size: 10px; color: #333; }
+        td { padding: 4px 6px; vertical-align: top; }
+        .info-table th { border-bottom: none; }
+        .info-table td { border-top: none; font-weight: bold; }
+
+        .pneus-table th { text-align: center; background-color: #e0e0e0; font-weight: bold; font-size: 11px; }
+        .pneus-table td { text-align: center; }
+        .pneus-table td.text-left { text-align: left; }
+        .pneus-table thead { display: table-header-group; }
+        .pneus-table td, .pneus-table th { overflow-wrap: anywhere; word-break: break-word; }
+        .total-pneus { text-align: right; font-weight: bold; font-size: 14px; margin-bottom: 20px; }
+        .obs-box { border: 1px solid #000; padding: 8px; min-height: 60px; margin-bottom: 30px; font-size: 11px; white-space: pre-wrap; }
+        .assinaturas { display: flex; justify-content: space-around; margin-top: 30px; }
+        .assinatura-box { text-align: center; width: 45%; font-size: 12px; }
+        .linha-assinatura { border-top: 1px solid #000; margin-bottom: 5px; margin-top: 5px;}
+
+        /* ==========================================================================
+           NOVOS ESTILOS - MODAL E ETAPAS (COLETA E ASSINATURA)
+           ========================================================================== */
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.6); z-index: 1000;
+            display: none; justify-content: center; align-items: center;
+        }
+        .modal-content {
+            background: #fff; padding: 25px; border-radius: 8px; width: 90%; max-width: 600px;
+            max-height: 90vh; overflow-y: auto; box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        }
+        .modal-content h2 { color: var(--primary-color); margin-bottom: 20px; text-align: center; font-size: 20px; }
+        .form-group { margin-bottom: 15px; }
+        .form-group label { display: block; font-weight: bold; margin-bottom: 5px; font-size: 14px; color: var(--secondary-color); }
+        .form-group input[type="text"], .form-group textarea.modal-textarea {
+            width: 100%; padding: 10px; border: 1px solid var(--border-color); border-radius: 4px;
+            font-size: 14px; font-family: inherit;
+        }
+        .form-group textarea.modal-textarea { height: 80px; resize: vertical; box-shadow: none; margin-bottom: 0; }
+        .modal-buttons { display: flex; justify-content: space-between; margin-top: 25px; gap: 10px; }
+        .modal-btn { padding: 12px; flex: 1; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; color: #fff; text-align: center;}
+        .btn-cancelar { background-color: #95a5a6; }
+        .btn-cancelar:hover { background-color: #7f8c8d; }
+        .btn-avancar { background-color: var(--accent-color); }
+        .btn-avancar:hover { background-color: #2980b9; }
+        .btn-finalizar { background-color: var(--success-color); }
+        .btn-finalizar:hover { background-color: #219150; }
+        
+        .canvas-wrapper {
+            border: 2px solid var(--border-color); background: #fdfdfd;
+            border-radius: 4px; overflow: hidden; margin-bottom: 5px;
+            touch-action: none; /* Previne scroll no celular ao assinar */
+        }
+        canvas { display: block; width: 100%; height: 150px; cursor: crosshair; }
+        .btn-limpar-canvas { 
+            background-color: #e74c3c; color: #fff; border: none; padding: 6px 12px; 
+            border-radius: 4px; font-size: 12px; cursor: pointer; font-weight: bold;
+        }
+        .btn-limpar-canvas:hover { background-color: #c0392b; }
+
+        /* ==========================================================================
+           CONFIGURAÇÕES DE IMPRESSÃO NATIVA DO NAVEGADOR
+           ========================================================================== */
+        @media print {
+            body { background: #fff; margin: 0; padding: 0; }
+            #app-container, #feedback-container, .botoes-acao, #acoes-resultado, h1, .instrucao { display: none !important; }
+            #preview-wrapper { display: block; border: none; padding: 0; background: #fff; overflow: visible; }
+            .pdf-page { margin: 0; box-shadow: none; page-break-after: always; border: none; }
+            .modal-overlay { display: none !important; }
+        }
+    </style>
+</head>
+<body>
+
+   <div id="app-container">
+    <h1>Gerador de Comprovante de Coleta</h1>
+    <div style="text-align: center; color: #95a5a6; font-size: 12px; margin-top: -5px; margin-bottom: 15px;">Versão 5.1</div>
+    <p class="instrucao">Cole abaixo o texto bruto do comprovante. A inteligência do sistema irá extrair os dados e organizar o layout profissionalmente.</p>
+        <textarea id="texto-entrada" placeholder="Cole o conteúdo bruto aqui..."></textarea>
+        
+        <div class="botoes-acao">
+            <button id="btn-limpar">LIMPAR</button>
+            <button id="btn-gerar">GERAR COMPROVANTE</button>
+        </div>
+
+        <div id="feedback-container"></div>
+        
+        <div id="acoes-resultado">
+            <button id="btn-whatsapp">💬 COMPARTILHAR NO WHATSAPP</button>
+            <button id="btn-baixar-pdf">📄 BAIXAR PDF</button>
+        </div>
+
+        <div id="preview-wrapper">
+            <div id="documento-final"></div>
+        </div>
+    </div>
+
+    <!-- MODAL DE FLUXO ADICIONAL -->
+    <div id="modal-coleta" class="modal-overlay">
+        <div class="modal-content">
+            <!-- ETAPA 1 -->
+            <div id="etapa-informacoes">
+                <h2>Informações da Coleta</h2>
+                <div class="form-group">
+                    <label for="input-observacao">Há alguma observação na coleta? (Opcional)</label>
+                    <textarea id="input-observacao" class="modal-textarea" placeholder="Digite aqui se houver avarias, condições especiais, etc..."></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="input-resp-cliente">Responsável Cliente (Obrigatório)</label>
+                    <input type="text" id="input-resp-cliente" placeholder="Nome de quem entregou os pneus">
+                </div>
+                <div class="form-group">
+                    <label for="input-resp-coletor">Responsável Coletor (Obrigatório)</label>
+                    <input type="text" id="input-resp-coletor" placeholder="Nome do motorista/ajudante">
+                </div>
+                <div class="modal-buttons">
+                    <button class="modal-btn btn-cancelar" id="btn-cancelar-etapa1">CANCELAR</button>
+                    <button class="modal-btn btn-avancar" id="btn-continuar-assinaturas">CONTINUAR PARA ASSINATURAS</button>
+                </div>
+            </div>
+
+            <!-- ETAPA 2 -->
+            <div id="etapa-assinaturas" style="display: none;">
+                <h2>Assinaturas</h2>
+                <div class="form-group">
+                    <label>Assinatura do Responsável pelo Cliente</label>
+                    <div class="canvas-wrapper">
+                        <canvas id="canvas-cliente"></canvas>
+                    </div>
+                    <button class="btn-limpar-canvas" onclick="limparCanvas('canvas-cliente')">Limpar assinatura</button>
+                </div>
+                <div class="form-group" style="margin-top: 20px;">
+                    <label>Assinatura do Responsável pela Coleta</label>
+                    <div class="canvas-wrapper">
+                        <canvas id="canvas-coletor"></canvas>
+                    </div>
+                    <button class="btn-limpar-canvas" onclick="limparCanvas('canvas-coletor')">Limpar assinatura</button>
+                </div>
+                <div class="modal-buttons">
+                    <button class="modal-btn btn-cancelar" id="btn-voltar-informacoes">VOLTAR</button>
+                    <button class="modal-btn btn-finalizar" id="btn-finalizar-gerar">FINALIZAR E GERAR PDF</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let numeroColetaAtual = "comprovante"; 
+        
+        // ESTADO DOS NOVOS DADOS
+        const dadosComplementares = {
+            observacao: '',
+            responsavelCliente: '',
+            responsavelColetor: '',
+            assinaturaCliente: null,
+            assinaturaColetor: null
+        };
+        
+        let dadosExtraidosTemporarios = null; 
+        let eventosCanvasIniciados = false; 
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const btnGerar = document.getElementById('btn-gerar');
+            const btnLimpar = document.getElementById('btn-limpar');
+            const btnWhatsApp = document.getElementById('btn-whatsapp');
+            const btnBaixarPDF = document.getElementById('btn-baixar-pdf');
+            
+            const textoEntrada = document.getElementById('texto-entrada');
+            const feedbackContainer = document.getElementById('feedback-container');
+            const docFinal = document.getElementById('documento-final');
+            const previewWrapper = document.getElementById('preview-wrapper');
+            const acoesResultado = document.getElementById('acoes-resultado');
+
+            // CONTROLES DO MODAL
+            const modalColeta = document.getElementById('modal-coleta');
+            const etapaInformacoes = document.getElementById('etapa-informacoes');
+            const etapaAssinaturas = document.getElementById('etapa-assinaturas');
+            
+            const btnCancelarEtapa1 = document.getElementById('btn-cancelar-etapa1');
+            const btnContinuarAssinaturas = document.getElementById('btn-continuar-assinaturas');
+            const btnVoltarInformacoes = document.getElementById('btn-voltar-informacoes');
+            const btnFinalizarGerar = document.getElementById('btn-finalizar-gerar');
+
+            btnLimpar.addEventListener('click', () => {
+                textoEntrada.value = '';
+                feedbackContainer.style.display = 'none';
+                previewWrapper.style.display = 'none';
+                acoesResultado.style.display = 'none';
+                docFinal.innerHTML = '';
+                
+                document.getElementById('input-observacao').value = '';
+                document.getElementById('input-resp-cliente').value = '';
+                document.getElementById('input-resp-coletor').value = '';
+                limparDadosComplementares();
+            });
+
+            btnGerar.addEventListener('click', () => {
+                const texto = textoEntrada.value.trim();
+                if (!texto) {
+                    alert('Por favor, cole o texto do comprovante primeiro.');
+                    return;
+                }
+
+                const dadosExtraidos = parseComprovante(texto);
+
+                if (dadosExtraidos.pneus.length === 0) {
+                    alert('Não foi possível identificar uma tabela de pneus. Verifique o texto colado.');
+                    return;
+                }
+
+                numeroColetaAtual = dadosExtraidos.coleta.numero.replace(/[^a-zA-Z0-9]/g, '-'); 
+                
+                dadosExtraidosTemporarios = dadosExtraidos;
+                abrirEtapaInformacoes();
+            });
+            
+            btnCancelarEtapa1.addEventListener('click', () => {
+                fecharModal();
+            });
+            
+            btnContinuarAssinaturas.addEventListener('click', () => {
+                const obs = document.getElementById('input-observacao').value;
+                const respCliente = document.getElementById('input-resp-cliente').value.trim();
+                const respColetor = document.getElementById('input-resp-coletor').value.trim();
+                
+                if(!respCliente) { alert("Informe o Responsável pelo Cliente."); return; }
+                if(!respColetor) { alert("Informe o Responsável pela Coleta."); return; }
+                
+                dadosComplementares.observacao = obs;
+                dadosComplementares.responsavelCliente = respCliente;
+                dadosComplementares.responsavelColetor = respColetor;
+                
+                abrirEtapaAssinaturas();
+            });
+            
+            btnVoltarInformacoes.addEventListener('click', () => {
+                etapaAssinaturas.style.display = 'none';
+                etapaInformacoes.style.display = 'block';
+            });
+            
+            btnFinalizarGerar.addEventListener('click', () => {
+                const canvasCliente = document.getElementById('canvas-cliente');
+                const canvasColetor = document.getElementById('canvas-coletor');
+                
+                if(canvasCliente.isBlank) {
+                    alert("A assinatura do Responsável pelo Cliente está faltando.");
+                    return;
+                }
+                if(canvasColetor.isBlank) {
+                    alert("A assinatura do Responsável pela Coleta está faltando.");
+                    return;
+                }
+                
+                dadosComplementares.assinaturaCliente = canvasCliente.toDataURL("image/png");
+                dadosComplementares.assinaturaColetor = canvasColetor.toDataURL("image/png");
+                
+                fecharModal();
+                
+                // Exibe o wrapper PRIMEIRO para que o scrollHeight funcione no JS durante a renderização da paginação
+                previewWrapper.style.display = 'block';
+                acoesResultado.style.display = 'flex';
+                
+                renderizarDocumento(dadosExtraidosTemporarios);
+                exibirFeedback(dadosExtraidosTemporarios);
+
+                acoesResultado.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            });
+
+            // NOVO FLUXO WHATSAPP PREVIEW
+document.getElementById('btn-whatsapp').addEventListener('click', async () => {
+    if (!dadosExtraidosTemporarios) return;
+    
+    const d = dadosExtraidosTemporarios.coleta;
+    let msg = `COMPROVANTE DE COLETA\n\n`;
+    msg += `Nº Coleta: ${d.numero}\n`;
+    msg += `Cliente: ${d.clienteNome}\n`;
+    msg += `Total de Pneus: ${d.quantidade}\n`;
+
+    try {
+        const paginasHTML = document.querySelectorAll('.pdf-page');
+        const { jsPDF } = window.jspdf;
+        const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait', compress: true });
+
+        for (let i = 0; i < paginasHTML.length; i++) {
+            const canvas = await window.html2canvas(paginasHTML[i], { scale: 2, useCORS: true });
+            const imgData = canvas.toDataURL('image/jpeg', 0.98);
+            if (i > 0) pdf.addPage();
+            pdf.addImage(imgData, 'JPEG', 0, 0, 210, 297);
+        }
+
+        const pdfBlob = pdf.output('blob');
+        const arquivo = new File([pdfBlob], `Coleta_${numeroColetaAtual}.pdf`, { type: 'application/pdf' });
+
+        if (navigator.canShare && navigator.canShare({ files: [arquivo] })) {
+            await navigator.share({
+                title: 'Comprovante de Coleta',
+                text: msg,
+                files: [arquivo]
+            });
+            return;
+        }
+    } catch (e) {
+        console.warn('Compartilhamento direto indisponível, abrindo WhatsApp com texto.', e);
+    }
+
+    const url = `https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`;
+    window.open(url, '_blank');
+});
+
+            // FLUXO DE PDF ATUALIZADO (Mais simples porque agora temos páginas pré-calculadas)
+            btnBaixarPDF.addEventListener('click', async () => {
+                const paginasHTML = document.querySelectorAll('.pdf-page');
+                if (paginasHTML.length === 0) return;
+
+                const textoOriginal = btnBaixarPDF.innerHTML;
+                btnBaixarPDF.innerHTML = '⏳ GERANDO PDF...';
+                btnBaixarPDF.disabled = true;
+
+                try {
+                    // Preload de imagens para não bugar no html2canvas
+                    const imagens = Array.from(document.querySelectorAll('.pdf-page img'));
+                    await Promise.all(imagens.map(img => {
+                        if (img.complete) return Promise.resolve();
+                        return new Promise(resolve => {
+                            img.onload = resolve;
+                            img.onerror = resolve;
+                        });
+                    }));
+                    await new Promise(resolve => setTimeout(resolve, 100)); // pequeno respiro pro render
+
+                    if (typeof window.html2canvas !== 'function') {
+                        throw new Error('A biblioteca html2canvas não carregou.');
+                    }
+                    if (!window.jspdf || !window.jspdf.jsPDF) {
+                        throw new Error('A biblioteca jsPDF não carregou.');
+                    }
+
+                    const { jsPDF } = window.jspdf;
+                    const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait', compress: true });
+
+                    for (let i = 0; i < paginasHTML.length; i++) {
+                        const pageElement = paginasHTML[i];
+                        
+                        const canvas = await window.html2canvas(pageElement, {
+                            scale: 2,
+                            useCORS: true,
+                            allowTaint: false,
+                            backgroundColor: '#ffffff',
+                            logging: false
+                        });
+
+                        const imgData = canvas.toDataURL('image/jpeg', 0.98);
+                        
+                        if (i > 0) pdf.addPage();
+                        // 210 x 297 mm = A4 exato
+                        pdf.addImage(imgData, 'JPEG', 0, 0, 210, 297, undefined, 'FAST');
+                    }
+
+                    pdf.save(`Coleta_${numeroColetaAtual}.pdf`);
+                } catch (erro) {
+                    console.error('Erro ao gerar PDF:', erro);
+                    alert('Não foi possível gerar o PDF. Erro: ' + (erro.message || erro));
+                } finally {
+                    btnBaixarPDF.innerHTML = textoOriginal;
+                    btnBaixarPDF.disabled = false;
+                }
+            });
+        });
+        
+        // ==========================================
+        // FUNÇÕES DO NOVO FLUXO (MODAL E ASSINATURAS)
+        // ==========================================
+        
+        function abrirEtapaInformacoes() {
+            document.getElementById('etapa-assinaturas').style.display = 'none';
+            document.getElementById('etapa-informacoes').style.display = 'block';
+            document.getElementById('modal-coleta').style.display = 'flex';
+        }
+        
+        function abrirEtapaAssinaturas() {
+            document.getElementById('etapa-informacoes').style.display = 'none';
+            document.getElementById('etapa-assinaturas').style.display = 'block';
+            
+            if (!eventosCanvasIniciados) {
+                configurarEventosCanvas('canvas-cliente');
+                configurarEventosCanvas('canvas-coletor');
+                eventosCanvasIniciados = true;
+            } else {
+                redimensionarCanvas('canvas-cliente');
+                redimensionarCanvas('canvas-coletor');
+            }
+        }
+        
+        function fecharModal() {
+            document.getElementById('modal-coleta').style.display = 'none';
+        }
+        
+        function limparDadosComplementares() {
+            dadosComplementares.observacao = '';
+            dadosComplementares.responsavelCliente = '';
+            dadosComplementares.responsavelColetor = '';
+            dadosComplementares.assinaturaCliente = null;
+            dadosComplementares.assinaturaColetor = null;
+        }
+
+        function configurarEventosCanvas(canvasId) {
+            const canvas = document.getElementById(canvasId);
+            const ctx = canvas.getContext('2d');
+            
+            redimensionarCanvas(canvasId);
+            
+            ctx.lineWidth = 2;
+            ctx.lineCap = 'round';
+            ctx.strokeStyle = '#000000';
+            
+            canvas.isDrawing = false;
+            
+            function getMousePos(e) {
+                const rect = canvas.getBoundingClientRect();
+                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+                const scaleX = canvas.width / rect.width;
+                const scaleY = canvas.height / rect.height;
+                return {
+                    x: (clientX - rect.left) * scaleX,
+                    y: (clientY - rect.top) * scaleY
+                };
+            }
+            
+            function start(e) {
+                e.preventDefault();
+                canvas.isDrawing = true;
+                canvas.isBlank = false;
+                const pos = getMousePos(e);
+                ctx.beginPath();
+                ctx.moveTo(pos.x, pos.y);
+            }
+            
+            function draw(e) {
+                if (!canvas.isDrawing) return;
+                e.preventDefault();
+                const pos = getMousePos(e);
+                ctx.lineTo(pos.x, pos.y);
+                ctx.stroke();
+            }
+            
+            function stop(e) {
+                if (canvas.isDrawing) {
+                    e.preventDefault();
+                    canvas.isDrawing = false;
+                    ctx.closePath();
+                }
+            }
+            
+            canvas.addEventListener('mousedown', start);
+            canvas.addEventListener('mousemove', draw);
+            canvas.addEventListener('mouseup', stop);
+            canvas.addEventListener('mouseout', stop);
+            
+            canvas.addEventListener('touchstart', start, { passive: false });
+            canvas.addEventListener('touchmove', draw, { passive: false });
+            canvas.addEventListener('touchend', stop);
+        }
+        
+        function redimensionarCanvas(canvasId) {
+            const canvas = document.getElementById(canvasId);
+            const wrapper = canvas.parentElement;
+            canvas.width = wrapper.clientWidth;
+            canvas.height = 150;
+            limparCanvas(canvasId);
+        }
+
+        function limparCanvas(canvasId) {
+            const canvas = document.getElementById(canvasId);
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            canvas.isBlank = true;
+            ctx.lineWidth = 2;
+            ctx.lineCap = 'round';
+            ctx.strokeStyle = '#000000';
+        }
+
+        // ==========================================
+        // PARSER ORIGINAL (PRESERVADO)
+        // ==========================================
+
+        function limparValor(valor) {
+            if (!valor || valor.trim() === '' || valor.toLowerCase().trim() === 'null' || valor.toLowerCase().trim() === 'undefined') {
+                return '—';
+            }
+            return valor.trim();
+        }
+
+        function extrair(texto, regex, grupo = 1) {
+            const match = texto.match(regex);
+            return match ? limparValor(match[grupo]) : '—';
+        }
+
+        function parseComprovante(texto) {
+            const dados = {
+                coleta: {
+                    numero: '—', nf: '—', data: '—', dataNF: '—',
+                    veiculo: '—', clienteCodigo: '—', clienteNome: '—',
+                    cnpj: '—', inscricaoEstadual: '—', endereco: '—',
+                    cep: '—', cidade: '—', uf: '—', telefone: '—',
+                    contato: '—', filial: '—', quantidade: 0
+                },
+                pneus: []
+            };
+
+            const matchFilialOriginal = texto.match(/^([\s\S]*?)(?=COMPROVANTE DE COLETA)/i);
+            if (matchFilialOriginal) {
+                let filialTratada = matchFilialOriginal[1].trim().replace(/\r?\n/g, '<br>');
+                filialTratada = filialTratada.replace(/(<br>\s*)+/g, '<br>'); 
+                dados.coleta.filial = filialTratada;
+            }
+
+            const textoNormalizado = texto.replace(/\s+/g, ' ').trim();
+
+            dados.coleta.numero = extrair(textoNormalizado, /Numero:\s*([\d\/\-]+)/i);
+            dados.coleta.nf = extrair(textoNormalizado, /Num\.NF:\s*([\d]+)/i);
+            dados.coleta.data = extrair(textoNormalizado, /Data:\s*([\d\/]+)/i);
+            dados.coleta.dataNF = extrair(textoNormalizado, /Data NF:\s*([\d\/]+)/i); 
+            dados.coleta.veiculo = extrair(textoNormalizado, /Veiculo:\s*([A-Z0-9\-]+)/i);
+            
+            const matchCliente = textoNormalizado.match(/Cliente:\s*(\d+)?\s*(.+?)(?=\s+CNPJ|\s+Num\.NF|$)/i);
+            if (matchCliente) {
+                dados.coleta.clienteCodigo = limparValor(matchCliente[1]);
+                dados.coleta.clienteNome = limparValor(matchCliente[2]);
+            }
+
+            dados.coleta.cnpj = extrair(textoNormalizado, /CNPJ\/CPF:\s*([\d\.\-\/]+)/i);
+            dados.coleta.inscricaoEstadual = extrair(textoNormalizado, /Insc\.\s*Est\.:\s*(\S+)/i);
+            
+            const regexEnd = /Insc\.\s*Est\.:.*?[\r\n]+([\s\S]*?)(?=CEP\.?)/i;
+            const matchEnd = texto.match(regexEnd);
+            if (matchEnd) {
+                dados.coleta.endereco = limparValor(matchEnd[1].replace(/\r?\n/g, ' '));
+            }
+
+            const matchCep = textoNormalizado.match(/CEP\.?\s*([\d\-]+)\s*-\s*([A-Za-z\s]+?)\s*-\s*([A-Z]{2})/i);
+            if (matchCep) {
+                dados.coleta.cep = limparValor(matchCep[1]);
+                dados.coleta.cidade = limparValor(matchCep[2]);
+                dados.coleta.uf = limparValor(matchCep[3]);
+            } else {
+                dados.coleta.cep = extrair(textoNormalizado, /CEP\.?\s*([\d\-]+)/i);
+            }
+
+            const partesVia = texto.split(/Visto do Coletor/i);
+            const textoVia1 = partesVia[0];
+            const matchTels = [...textoVia1.matchAll(/Tel\.?\s*([\d\(\)\-\s]{8,20})/ig)];
+            if(matchTels.length > 0){
+               let telCliente = matchTels[matchTels.length - 1][1].trim();
+               dados.coleta.telefone = limparValor(telCliente);
+            }
+
+let tableText = textoVia1;
+            
+            // 1. Isola estritamente a área da tabela para evitar falsos positivos no cabeçalho
+            const matchInicioPneus = tableText.search(/(?:^|\r?\n)\s*001\s/);
+            if (matchInicioPneus !== -1) {
+                tableText = tableText.substring(matchInicioPneus);
+            }
+
+            const matchFimPneus = tableText.match(/\b(Quantidade|Visto|Total)\b/i);
+            if (matchFimPneus) {
+                tableText = tableText.substring(0, matchFimPneus.index);
+            }
+
+            let seq = 1;
+
+            while (true) {
+                let seqStrAtual = seq.toString().padStart(3, '0');
+                let seqStrProx = (seq + 1).toString().padStart(3, '0');
+                
+                let regexAtual = new RegExp(`(?:^|\\r?\\n)\\s*${seqStrAtual}\\s+([\\s\\S]*?)(?=(?:\\r?\\n\\s*${seqStrProx}\\s)|$)`, 'i');
+                let matchPneu = tableText.match(regexAtual);
+
+                if (!matchPneu) break; 
+
+                let linhas = matchPneu[1].trim().split(/\r?\n/);
+                
+                let linha1 = linhas[0] ? linhas[0].trim().split(/\s+/) : [];
+                let linha2 = linhas[1] ? linhas[1].replace(/[\(\)]+/g, '').trim().split(/\s+/) : [];
+
+                let marca = linha1[0] || '—';
+                // linha1[1] é o Modelo, que deve ser totalmente ignorado segundo a regra.
+                // O Desenho, se existir, só começa a partir da terceira palavra (índice 2).
+                let desenho = linha1.slice(2).join(' ') || '—';
+                
+                let medida = linha2[0] || '—';
+                let fogoDot = linha2[1] || '—';
+                let servico = linha2.slice(2).join(' ') || '—';
+
+                dados.pneus.push({
+                    item: seqStrAtual,
+                    marca: marca,
+                    desenho: desenho,
+                    medida: medida,
+                    fogoDot: fogoDot,
+                    servico: servico
+                });
+
+                seq++;
+            }
+
+            dados.coleta.quantidade = dados.pneus.length;
+            return dados;
+        }
+const cabecalhoSecundarioHTML = `
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 2px solid #000; padding-bottom: 8px;">
+        <img src="https://wsrv.nl/?url=alterosapneus.com.br/wp-content/uploads/2021/10/Asset-1.png" style="max-width: 120px; max-height: 35px;" crossorigin="anonymous">
+        <div style="font-size: 12px; font-weight: bold; text-transform: uppercase;">Relação de Pneus Coletados — Coleta: __NUMERO__</div>
+    </div>
+`;
+        // ==========================================
+        // RENDERIZAÇÃO COM PAGINAÇÃO INTELIGENTE (NOVO)
+        // ==========================================
+        function renderizarDocumento(dados) {
+            const docFinal = document.getElementById('documento-final');
+            docFinal.innerHTML = ''; 
+            
+            // Constantes de Altura da Página
+            const A4_HEIGHT = 1123; 
+// Mudamos para 1020 para garantir que o rodapé e a quebra funcionem com folga
+const MAX_CONTENT_HEIGHT = 1020;
+            
+            const logoUrl = "https://wsrv.nl/?url=alterosapneus.com.br/wp-content/uploads/2021/10/Asset-1.png";
+            
+            let pageDivs = [];
+            
+function createNewPage() {
+    const page = document.createElement('div');
+    page.className = 'pdf-page';
+    
+    // NOVO: Container interno dinâmico para medir a altura real do conteúdo
+    const contentArea = document.createElement('div');
+    contentArea.style.width = '100%';
+    page.appendChild(contentArea);
+    
+    docFinal.appendChild(page);
+    pageDivs.push(page);
+    
+    return contentArea; // Agora retornamos a área interna, não a página inteira
+}
+
+            let currentContainer = createNewPage();
+
+            // BLOCO 1: CABEÇALHO SUPERIOR DA COLETA
+            const cabecalhoHTML = `
+                <div style="text-align: right; font-size: 11px; font-weight: bold; margin-bottom: 4px; text-transform: uppercase;">Via do Cliente</div>
+                <table style="width: 100%; border: 2px solid #000; margin-bottom: 15px; border-collapse: collapse;">
+                    <tr>
+                        <td style="width: 35%; padding: 8px; vertical-align: top; border: none;">
+                            <img src="${logoUrl}" alt="Alterosa Pneus" style="max-width: 140px; max-height: 45px; display: block; margin-bottom: 6px;" crossorigin="anonymous">
+                            <div style="font-size: 9px; line-height: 1.3; font-weight: bold;">${dados.coleta.filial}</div>
+                        </td>
+                        <td style="width: 33%; padding: 8px; vertical-align: middle; text-align: center; border: none;">
+                            <h2 style="font-size: 16px; margin: 0; white-space: nowrap;">COMPROVANTE DE COLETA</h2>
+                            <p style="font-size: 11px; margin: 4px 0 0 0;">Documento de Conferência de Pneus</p>
+                        </td>
+                        <td style="width: 32%; padding: 8px; vertical-align: middle; text-align: right; border: none; font-size: 11px;">
+                            <div style="margin-bottom: 4px;"><strong>Nº Coleta:</strong> ${dados.coleta.numero}</div>
+                            <div style="margin-bottom: 4px;"><strong>Data:</strong> ${dados.coleta.data}</div>
+                            <div><strong>NF:</strong> ${dados.coleta.nf}</div>
+                        </td>
+                    </tr>
+                </table>
+
+                <div class="secao-titulo">Informações da Coleta</div>
+                <table class="info-table">
+                    <tr>
+                        <th width="70%">CLIENTE</th>
+                        <th width="30%">CÓDIGO</th>
+                    </tr>
+                    <tr>
+                        <td>${dados.coleta.clienteNome}</td>
+                        <td>${dados.coleta.clienteCodigo}</td>
+                    </tr>
+                </table>
+
+                <table class="info-table">
+                    <tr>
+                        <th width="50%">CNPJ / CPF</th>
+                        <th width="50%">INSCRIÇÃO ESTADUAL</th>
+                    </tr>
+                    <tr>
+                        <td>${dados.coleta.cnpj}</td>
+                        <td>${dados.coleta.inscricaoEstadual}</td>
+                    </tr>
+                </table>
+
+                <table class="info-table">
+                    <tr>
+                        <th width="25%">DATA COLETA</th>
+                        <th width="25%">DATA NF</th>
+                        <th width="25%">VEÍCULO</th>
+                        <th width="25%">TELEFONE</th>
+                    </tr>
+                    <tr>
+                        <td>${dados.coleta.data}</td>
+                        <td>${dados.coleta.dataNF}</td>
+                        <td>${dados.coleta.veiculo}</td>
+                        <td>${dados.coleta.telefone}</td>
+                    </tr>
+                </table>
+                
+                <table class="info-table">
+                    <tr>
+                        <th width="60%">ENDEREÇO</th>
+                        <th width="40%">CEP / CIDADE / UF</th>
+                    </tr>
+                    <tr>
+                        <td>${dados.coleta.endereco}</td>
+                        <td>${dados.coleta.cep} - ${dados.coleta.cidade} - ${dados.coleta.uf}</td>
+                    </tr>
+                </table>
+                <div class="secao-titulo" style="margin-top: 15px;">Relação de Pneus Coletados</div>
+            `;
+            currentContainer.insertAdjacentHTML('beforeend', cabecalhoHTML);
+
+            // BLOCO 2: TABELA DE PNEUS COM QUEBRA AUTOMÁTICA
+            let table = document.createElement('table');
+            table.className = 'pneus-table';
+            table.innerHTML = `
+                <thead>
+                    <tr>
+                        <th width="5%">Item</th>
+                        <th width="15%">Fogo / DOT</th>
+                        <th width="20%">Medida</th>
+                        <th width="20%">Marca</th>
+                        <th width="20%">Desenho</th>
+                        <th width="20%">Serviço</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            `;
+            currentContainer.appendChild(table);
+            let tbody = table.querySelector('tbody');
+
+            dados.pneus.forEach(pneu => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${pneu.item}</td>
+                    <td>${pneu.fogoDot}</td>
+                    <td>${pneu.medida}</td>
+                    <td class="text-left">${pneu.marca}</td>
+                    <td>${pneu.desenho}</td>
+                    <td class="text-left">${pneu.servico}</td>
+                `;
+                tbody.appendChild(tr);
+
+// Verifica se a tabela empurrou o conteúdo além do limite
+if (currentContainer.scrollHeight > MAX_CONTENT_HEIGHT) {
+    tbody.removeChild(tr); // Remove a linha que causou o estouro
+    
+    currentContainer = createNewPage(); // Cria página nova
+    
+    // Insere o cabeçalho enxuto na nova folha (com o número da coleta dinâmico)
+    const cabecalhoCompactoFinal = cabecalhoSecundarioHTML.replace('__NUMERO__', dados.coleta.numero);
+    currentContainer.insertAdjacentHTML('beforeend', cabecalhoCompactoFinal);
+    
+    // Recriamos a tabela e o cabeçalho das colunas
+    table = document.createElement('table');
+    table.className = 'pneus-table';
+    table.innerHTML = `
+        <thead>
+            <tr>
+                <th width="5%">Item</th>
+                <th width="15%">Fogo / DOT</th>
+                <th width="20%">Medida</th>
+                <th width="20%">Marca</th>
+                <th width="20%">Desenho</th>
+                <th width="20%">Serviço</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    `;
+    currentContainer.appendChild(table);
+    tbody = table.querySelector('tbody');
+    
+    tbody.appendChild(tr); // Insere a linha na nova folha
+}
+            });
+
+            // BLOCO 3: RODAPÉ DE OBSERVAÇÃO E ASSINATURAS
+            const footerDiv = document.createElement('div');
+            const textoObs = dadosComplementares.observacao ? dadosComplementares.observacao : 'Sem observações';
+            footerDiv.innerHTML = `
+                <div class="total-pneus">QUANTIDADE TOTAL DE PNEUS: ${dados.coleta.quantidade}</div>
+                <div class="secao-titulo">Observações</div>
+                <div class="obs-box">${textoObs}</div>
+                <div class="assinaturas">
+                    <div class="assinatura-box">
+                        <img src="${dadosComplementares.assinaturaCliente}" style="max-height: 70px; max-width: 100%; display: block; margin: 0 auto;">
+                        <div class="linha-assinatura"></div>
+                        Visto do Cliente:<br><strong>${dadosComplementares.responsavelCliente}</strong>
+                    </div>
+                    <div class="assinatura-box">
+                        <img src="${dadosComplementares.assinaturaColetor}" style="max-height: 70px; max-width: 100%; display: block; margin: 0 auto;">
+                        <div class="linha-assinatura"></div>
+                        Visto do Coletor:<br><strong>${dadosComplementares.responsavelColetor}</strong>
+                    </div>
+                </div>
+            `;
+            
+            currentContainer.appendChild(footerDiv);
+
+            // Se o rodapé não couber nessa folha, move ele inteiro pra folha seguinte
+            if (currentContainer.scrollHeight > MAX_CONTENT_HEIGHT) {
+                currentContainer.removeChild(footerDiv);
+                currentContainer = createNewPage();
+                currentContainer.appendChild(footerDiv);
+            }
+
+            // BLOCO 4: NÚMEROS DA PÁGINA
+            pageDivs.forEach((page, index) => {
+                const pageNum = document.createElement('div');
+                pageNum.className = 'page-number';
+                pageNum.innerHTML = `Página ${index + 1} de ${pageDivs.length}`;
+                page.appendChild(pageNum);
+            });
+        }
+
+        function exibirFeedback(dados) {
+            const fb = document.getElementById('feedback-container');
+            const camposImportantes = [dados.coleta.numero, dados.coleta.clienteNome, dados.coleta.veiculo];
+            const possuiAlerta = camposImportantes.some(campo => campo === '—');
+
+            let html = `
+                <h3>✓ Comprovante processado com sucesso</h3>
+                <ul>
+                    <li><strong>Coleta:</strong> ${dados.coleta.numero}</li>
+                    <li><strong>Cliente:</strong> ${dados.coleta.clienteNome}</li>
+                    <li><strong>Pneus identificados:</strong> ${dados.coleta.quantidade}</li>
+                </ul>
+            `;
+
+            if (possuiAlerta) {
+                html += `<div class="aviso">⚠ Alguns campos ficaram em branco. Confira o documento.</div>`;
+            }
+
+            fb.innerHTML = html;
+            fb.style.display = 'block';
+        }
+    </script>
+</body>
+</html>
