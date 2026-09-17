@@ -254,7 +254,9 @@
     </div>
 
     <script>
-        let numeroColetaAtual = "comprovante"; 
+        let numeroColetaAtual = "comprovante";
+        let arquivoPdfCompartilhamento = null;
+        let promessaPdfCompartilhamento = null;
         
         // ESTADO DOS NOVOS DADOS
         const dadosComplementares = {
@@ -297,6 +299,8 @@
                 previewWrapper.style.display = 'none';
                 acoesResultado.style.display = 'none';
                 docFinal.innerHTML = '';
+                arquivoPdfCompartilhamento = null;
+                promessaPdfCompartilhamento = null;
                 
                 document.getElementById('input-coleta-sga').value = '';
                 document.getElementById('input-observacao').value = '';
@@ -351,7 +355,7 @@
                 etapaInformacoes.style.display = 'block';
             });
             
-            btnFinalizarGerar.addEventListener('click', () => {
+            btnFinalizarGerar.addEventListener('click', async () => {
                 const canvasCliente = document.getElementById('canvas-cliente');
                 const canvasColetor = document.getElementById('canvas-coletor');
                 
@@ -377,53 +381,58 @@
                 exibirFeedback(dadosExtraidosTemporarios);
 
                 acoesResultado.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+                arquivoPdfCompartilhamento = null;
+                promessaPdfCompartilhamento = null;
+                btnWhatsApp.disabled = true;
+                btnWhatsApp.innerHTML = '⏳ PREPARANDO ANEXO...';
+
+                try {
+                    await prepararArquivoPdfCompartilhamento();
+                    btnWhatsApp.innerHTML = '💬 COMPARTILHAR NO WHATSAPP';
+                    btnWhatsApp.disabled = false;
+                } catch (erro) {
+                    console.error('Erro ao preparar o PDF para compartilhamento:', erro);
+                    btnWhatsApp.innerHTML = '⚠ NÃO FOI POSSÍVEL PREPARAR O PDF';
+                    alert('O comprovante foi gerado, mas não foi possível preparar o PDF para o WhatsApp. Erro: ' + (erro.message || erro));
+                }
             });
 
-            // NOVO FLUXO WHATSAPP PREVIEW
-document.getElementById('btn-whatsapp').addEventListener('click', async () => {
-    if (!dadosExtraidosTemporarios) return;
-    
-    const d = dadosExtraidosTemporarios.coleta;
-    let msg = `Olá! Segue o comprovante da coleta, realizada em ${d.data}.\n\n`;
-    msg += `Quantidade coletada: ${d.quantidade} pneus\n`;
-    msg += `Veículo: ${d.veiculo}\n`;
-    msg += `Cliente: ${d.clienteNome}\n\n`;
-    msg += `Solicitamos que confira as informações e responda:\n\n`;
-    msg += `✅ DE ACORDO\n\n`;
-    msg += `Caso exista alguma divergência, favor responder nesta conversa.\n\n`;
-    msg += `Atenciosamente,\n`;
-    msg += `Central de Coletas Recapagem Alterosa Ltda.`;
+            // COMPARTILHAMENTO DO PDF COM A MENSAGEM PADRÃO
+            btnWhatsApp.addEventListener('click', async () => {
+                if (!dadosExtraidosTemporarios || !arquivoPdfCompartilhamento) {
+                    alert('O anexo ainda está sendo preparado. Aguarde alguns instantes e tente novamente.');
+                    return;
+                }
 
-    try {
-        const paginasHTML = document.querySelectorAll('.pdf-page');
-        const { jsPDF } = window.jspdf;
-        const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait', compress: true });
+                const msg = montarMensagemWhatsApp(dadosExtraidosTemporarios.coleta);
+                const arquivo = arquivoPdfCompartilhamento;
 
-        for (let i = 0; i < paginasHTML.length; i++) {
-            const canvas = await window.html2canvas(paginasHTML[i], { scale: 2, useCORS: true });
-            const imgData = canvas.toDataURL('image/jpeg', 0.98);
-            if (i > 0) pdf.addPage();
-            pdf.addImage(imgData, 'JPEG', 0, 0, 210, 297);
-        }
+                try {
+                    const suportaArquivo = typeof navigator.share === 'function' &&
+                        typeof navigator.canShare === 'function' &&
+                        navigator.canShare({ files: [arquivo] });
 
-        const pdfBlob = pdf.output('blob');
-        const arquivo = new File([pdfBlob], `Coleta_${numeroColetaAtual}.pdf`, { type: 'application/pdf' });
+                    if (suportaArquivo) {
+                        await navigator.share({
+                            title: `Comprovante da coleta ${dadosExtraidosTemporarios.coleta.numero}`,
+                            text: msg,
+                            files: [arquivo]
+                        });
+                        return;
+                    }
+                } catch (erro) {
+                    if (erro && erro.name === 'AbortError') return;
+                    console.warn('O navegador não concluiu o compartilhamento do arquivo.', erro);
+                }
 
-        if (navigator.canShare && navigator.canShare({ files: [arquivo] })) {
-            await navigator.share({
-                title: 'Comprovante de Coleta',
-                text: msg,
-                files: [arquivo]
+                // WhatsApp Web não permite anexar um arquivo automaticamente por URL.
+                // Nesse caso, o PDF é baixado e a conversa é aberta com o texto preenchido.
+                baixarArquivoPdf(arquivo);
+                const url = `https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`;
+                window.open(url, '_blank');
+                alert('Seu navegador não permite anexar o PDF automaticamente ao WhatsApp Web. O arquivo foi baixado; anexe-o na conversa que foi aberta.');
             });
-            return;
-        }
-    } catch (e) {
-        console.warn('Compartilhamento direto indisponível, abrindo WhatsApp com texto.', e);
-    }
-
-    const url = `https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`;
-    window.open(url, '_blank');
-});
 
             // FLUXO DE PDF ATUALIZADO (Mais simples porque agora temos páginas pré-calculadas)
             btnBaixarPDF.addEventListener('click', async () => {
@@ -435,46 +444,8 @@ document.getElementById('btn-whatsapp').addEventListener('click', async () => {
                 btnBaixarPDF.disabled = true;
 
                 try {
-                    // Preload de imagens para não bugar no html2canvas
-                    const imagens = Array.from(document.querySelectorAll('.pdf-page img'));
-                    await Promise.all(imagens.map(img => {
-                        if (img.complete) return Promise.resolve();
-                        return new Promise(resolve => {
-                            img.onload = resolve;
-                            img.onerror = resolve;
-                        });
-                    }));
-                    await new Promise(resolve => setTimeout(resolve, 100)); // pequeno respiro pro render
-
-                    if (typeof window.html2canvas !== 'function') {
-                        throw new Error('A biblioteca html2canvas não carregou.');
-                    }
-                    if (!window.jspdf || !window.jspdf.jsPDF) {
-                        throw new Error('A biblioteca jsPDF não carregou.');
-                    }
-
-                    const { jsPDF } = window.jspdf;
-                    const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait', compress: true });
-
-                    for (let i = 0; i < paginasHTML.length; i++) {
-                        const pageElement = paginasHTML[i];
-                        
-                        const canvas = await window.html2canvas(pageElement, {
-                            scale: 2,
-                            useCORS: true,
-                            allowTaint: false,
-                            backgroundColor: '#ffffff',
-                            logging: false
-                        });
-
-                        const imgData = canvas.toDataURL('image/jpeg', 0.98);
-                        
-                        if (i > 0) pdf.addPage();
-                        // 210 x 297 mm = A4 exato
-                        pdf.addImage(imgData, 'JPEG', 0, 0, 210, 297, undefined, 'FAST');
-                    }
-
-                    pdf.save(`Coleta_${numeroColetaAtual}.pdf`);
+                    const arquivo = await prepararArquivoPdfCompartilhamento();
+                    baixarArquivoPdf(arquivo);
                 } catch (erro) {
                     console.error('Erro ao gerar PDF:', erro);
                     alert('Não foi possível gerar o PDF. Erro: ' + (erro.message || erro));
@@ -484,6 +455,103 @@ document.getElementById('btn-whatsapp').addEventListener('click', async () => {
                 }
             });
         });
+
+        function montarMensagemWhatsApp(coleta) {
+            const quantidade = Number(coleta.quantidade) || 0;
+            const unidade = quantidade === 1 ? 'pneu' : 'pneus';
+
+            return `Olá! Segue o comprovante da coleta nº ${coleta.numero}, realizada em ${coleta.data}.\n\n` +
+                `Quantidade coletada: ${quantidade} ${unidade}\n` +
+                `Veículo: ${coleta.veiculo}\n` +
+                `Cliente: ${coleta.clienteNome}\n\n` +
+                `Solicitamos que confira as informações e responda:\n\n` +
+                `✅ DE ACORDO\n\n` +
+                `Caso exista alguma divergência, favor responder nesta conversa.\n\n` +
+                `Atenciosamente,\n` +
+                `Central de Coletas Recapagem Alterosa Ltda.`;
+        }
+
+        async function prepararArquivoPdfCompartilhamento() {
+            if (arquivoPdfCompartilhamento) {
+                return arquivoPdfCompartilhamento;
+            }
+
+            if (promessaPdfCompartilhamento) {
+                return promessaPdfCompartilhamento;
+            }
+
+            promessaPdfCompartilhamento = (async () => {
+                const paginasHTML = document.querySelectorAll('.pdf-page');
+                if (paginasHTML.length === 0) {
+                    throw new Error('Nenhuma página do comprovante foi encontrada.');
+                }
+
+                const imagens = Array.from(document.querySelectorAll('.pdf-page img'));
+                await Promise.all(imagens.map(img => {
+                    if (img.complete) return Promise.resolve();
+                    return new Promise(resolve => {
+                        img.onload = resolve;
+                        img.onerror = resolve;
+                    });
+                }));
+                await new Promise(resolve => setTimeout(resolve, 100));
+
+                if (typeof window.html2canvas !== 'function') {
+                    throw new Error('A biblioteca html2canvas não carregou.');
+                }
+                if (!window.jspdf || !window.jspdf.jsPDF) {
+                    throw new Error('A biblioteca jsPDF não carregou.');
+                }
+
+                const { jsPDF } = window.jspdf;
+                const pdf = new jsPDF({
+                    unit: 'mm',
+                    format: 'a4',
+                    orientation: 'portrait',
+                    compress: true
+                });
+
+                for (let i = 0; i < paginasHTML.length; i++) {
+                    const canvas = await window.html2canvas(paginasHTML[i], {
+                        scale: 2,
+                        useCORS: true,
+                        allowTaint: false,
+                        backgroundColor: '#ffffff',
+                        logging: false
+                    });
+                    const imgData = canvas.toDataURL('image/jpeg', 0.98);
+
+                    if (i > 0) pdf.addPage();
+                    pdf.addImage(imgData, 'JPEG', 0, 0, 210, 297, undefined, 'FAST');
+                }
+
+                const pdfBlob = pdf.output('blob');
+                arquivoPdfCompartilhamento = new File(
+                    [pdfBlob],
+                    `Coleta_${numeroColetaAtual}.pdf`,
+                    { type: 'application/pdf' }
+                );
+
+                return arquivoPdfCompartilhamento;
+            })();
+
+            try {
+                return await promessaPdfCompartilhamento;
+            } finally {
+                promessaPdfCompartilhamento = null;
+            }
+        }
+
+        function baixarArquivoPdf(arquivo) {
+            const urlArquivo = URL.createObjectURL(arquivo);
+            const link = document.createElement('a');
+            link.href = urlArquivo;
+            link.download = arquivo.name;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            setTimeout(() => URL.revokeObjectURL(urlArquivo), 1000);
+        }
         
         // ==========================================
         // FUNÇÕES DO NOVO FLUXO (MODAL E ASSINATURAS)
